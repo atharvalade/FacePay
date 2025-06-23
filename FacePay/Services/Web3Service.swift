@@ -31,7 +31,7 @@ class Web3Service: ObservableObject {
     private let paymentHubAddress = AppConfig.paymentHubAddress
     
     // API Configuration
-    private let apiBaseURL = "http://localhost:3000" // Use local API for testing
+    private let apiBaseURL = "https://your-facepay-api.vercel.app" // Update this with your Vercel URL
     
     // Rate limiting
     private var lastRequestTimestamp: Date = .distantPast
