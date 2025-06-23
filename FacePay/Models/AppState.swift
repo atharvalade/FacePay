@@ -242,72 +242,31 @@ class AppState: ObservableObject {
     
     @MainActor
     func handleMerchantFaceCapture(_ image: UIImage) async {
-        guard let queryEmbedding = await faceService.generateFaceEmbedding(from: image) else {
-            showAlert(title: "Face Detection Failed", message: "Could not detect a face in the image. Please try again.")
+        // Convert image to JPEG data for API
+        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+            showAlert(title: "Image Processing Failed", message: "Could not process the captured image. Please try again.")
             return
         }
         
-        print("🎯 Face captured, searching for matches...")
+        print("🎯 Face captured, using API for neural network matching...")
         
-        // Get embeddings from Supabase (cloud storage)
-        do {
-            let supabaseEmbeddings = try await supabaseService.getAllFaceEmbeddings()
-            print("📦 Retrieved \(supabaseEmbeddings.count) embeddings from Supabase")
+        // Use API-based face recognition with face-api.js neural networks
+        if let match = await web3Service.matchFaceViaAPI(imageData: imageData) {
+            print("✅ API Face match found!")
+            print("   - User: \(match.userName)")
+            print("   - Wallet: \(match.walletAddress)")
+            print("   - Confidence: \(String(format: "%.1f", match.confidence * 100))%")
+            print("   - Payment amount: \(merchantAmount) PYUSD")
             
-            // Log all embeddings for debugging
-            for embedding in supabaseEmbeddings {
-                print("   - PayPal ID: \(embedding.paypalId), Wallet: \(embedding.walletAddress)")
+            lastCustomerMatch = match
+            
+            // Process payment with proper async handling
+            Task {
+                await processPayment(match: match)
             }
-            
-            // Convert Supabase embeddings to local format for matching
-            let localEmbeddings = supabaseEmbeddings.map { supabaseEmbedding in
-                FaceEmbedding(
-                    walletAddress: supabaseEmbedding.walletAddress,
-                    embedding: supabaseEmbedding.embedding.map { Float($0) }, // Convert Double to Float
-                    userName: "PayPal User", // We'll get the name from PayPal ID later
-                    registrationDate: supabaseEmbedding.createdAt ?? Date()
-                )
-            }
-            
-            print("🔍 Looking for face match...")
-            if let match = faceService.findBestMatch(for: queryEmbedding, in: localEmbeddings), match.isMatch {
-                print("✅ Face match found!")
-                print("   - Confidence: \(match.confidence)")
-                print("   - Wallet: \(match.walletAddress)")
-                print("   - Payment amount: \(merchantAmount) PYUSD")
-                
-                lastCustomerMatch = match
-                
-                // Process payment with proper async handling
-                Task {
-                    await processPayment(match: match)
-                }
-            } else {
-                print("❌ No face match found")
-                showAlert(title: "No Match Found", message: "Face not recognized. Customer may need to register first.")
-            }
-            
-        } catch {
-            print("❌ Error getting embeddings from Supabase: \(error)")
-            // Fallback to local storage
-            let allEmbeddings = storageService.getAllEmbeddings()
-            print("📱 Fallback to local storage: \(allEmbeddings.count) embeddings")
-            
-            if let match = faceService.findBestMatch(for: queryEmbedding, in: allEmbeddings), match.isMatch {
-                print("✅ Local face match found!")
-                print("   - Confidence: \(match.confidence)")
-                print("   - Wallet: \(match.walletAddress)")
-                
-                lastCustomerMatch = match
-                
-                // Process payment with proper async handling
-                Task {
-                    await processPayment(match: match)
-                }
-            } else {
-                print("❌ No local face match found")
-                showAlert(title: "No Match Found", message: "Face not recognized. Customer may need to register first.")
-            }
+        } else {
+            print("❌ No face match found by API")
+            showAlert(title: "No Match Found", message: "Face not recognized by neural network. Customer may need to register first with proper lighting and clear face visibility.")
         }
     }
     

@@ -54,7 +54,7 @@ struct AppConfig {
     static let pyusdDecimals = 6
     
     // MARK: - Face Recognition Configuration
-    static let faceMatchThreshold: Float = 0.7
+    static let faceMatchThreshold: Float = 0.75 // Increased for better security
     static let embeddingsFileName = "face_embeddings.json"
     
     // MARK: - Demo Users (PayPal Sandbox with Real Names)

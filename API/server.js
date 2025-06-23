@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const { ethers } = require('ethers');
+const multer = require('multer');
+const faceRecognition = require('./faceRecognition');
 require('dotenv').config();
 
 const app = express();
@@ -8,7 +10,16 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Configure multer for image uploads
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB limit
+    }
+});
 
 // Configuration
 const SEPOLIA_RPC = process.env.SEPOLIA_RPC || "https://sepolia.infura.io/v3/40f21c9a3e114c7d880efefc7d9b04be";
@@ -22,6 +33,22 @@ const ERC20_ABI = [
     "function decimals() view returns (uint8)"
 ];
 
+// Initialize face recognition models on startup
+let modelsLoaded = false;
+async function initializeFaceRecognition() {
+    try {
+        console.log('🤖 Initializing face-api.js models...');
+        await faceRecognition.loadModels();
+        modelsLoaded = true;
+        console.log('✅ Face recognition ready!');
+    } catch (error) {
+        console.error('❌ Face recognition initialization failed:', error);
+    }
+}
+
+// Initialize on startup
+initializeFaceRecognition();
+
 // Helper function to send Server-Sent Events
 function sendEvent(res, event, data) {
     res.write(`event: ${event}\n`);
@@ -30,7 +57,138 @@ function sendEvent(res, event, data) {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+    const faceStatus = faceRecognition.getStatus();
+    res.json({ 
+        status: 'healthy', 
+        timestamp: new Date().toISOString(),
+        faceRecognition: {
+            ready: faceStatus.modelsLoaded,
+            method: faceStatus.method,
+            fallbackMode: faceStatus.fallbackMode,
+            faceCount: faceStatus.faceCount
+        }
+    });
+});
+
+// Face Recognition Endpoints
+
+// Register face endpoint
+app.post('/face/register', upload.single('image'), async (req, res) => {
+    try {
+        if (!modelsLoaded) {
+            return res.status(503).json({ error: 'Face recognition models not ready' });
+        }
+
+        const { walletAddress, userName } = req.body;
+        
+        if (!req.file) {
+            return res.status(400).json({ error: 'No image file provided' });
+        }
+
+        if (!walletAddress) {
+            return res.status(400).json({ error: 'Wallet address required' });
+        }
+
+        console.log(`👤 Registering face for wallet: ${walletAddress}`);
+        
+        const result = await faceRecognition.registerFace(
+            walletAddress, 
+            req.file.buffer,
+            userName || 'User'
+        );
+
+        res.json({
+            success: true,
+            walletAddress: result.walletAddress,
+            confidence: result.confidence,
+            message: 'Face registered successfully'
+        });
+
+    } catch (error) {
+        console.error('❌ Face registration error:', error);
+        res.status(400).json({ 
+            error: error.message || 'Face registration failed' 
+        });
+    }
+});
+
+// Face matching endpoint
+app.post('/face/match', upload.single('image'), async (req, res) => {
+    try {
+        if (!modelsLoaded) {
+            return res.status(503).json({ error: 'Face recognition models not ready' });
+        }
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No image file provided' });
+        }
+
+        console.log('🔍 Processing face match request...');
+        
+        const match = await faceRecognition.findBestMatch(req.file.buffer, 0.6);
+
+        if (match) {
+            res.json({
+                success: true,
+                match: {
+                    walletAddress: match.walletAddress,
+                    userName: match.userName,
+                    confidence: match.similarity,
+                    distance: match.distance
+                }
+            });
+        } else {
+            res.json({
+                success: false,
+                message: 'No matching face found'
+            });
+        }
+
+    } catch (error) {
+        console.error('❌ Face matching error:', error);
+        res.status(400).json({ 
+            error: error.message || 'Face matching failed' 
+        });
+    }
+});
+
+// Load face database endpoint (for external face data)
+app.post('/face/load-database', async (req, res) => {
+    try {
+        const { faceEmbeddings } = req.body;
+        
+        if (!Array.isArray(faceEmbeddings)) {
+            return res.status(400).json({ error: 'faceEmbeddings must be an array' });
+        }
+
+        await faceRecognition.loadFaceDatabase(faceEmbeddings);
+        
+        res.json({
+            success: true,
+            loadedCount: faceEmbeddings.length,
+            totalFaces: faceRecognition.getFaceCount()
+        });
+
+    } catch (error) {
+        console.error('❌ Database load error:', error);
+        res.status(500).json({ 
+            error: error.message || 'Failed to load face database' 
+        });
+    }
+});
+
+// Get face database info
+app.get('/face/info', (req, res) => {
+    const status = faceRecognition.getStatus();
+    res.json({
+        ...status,
+        faces: faceRecognition.getAllFaces().map(face => ({
+            walletAddress: face.walletAddress,
+            userName: face.userName,
+            registrationDate: face.registrationDate,
+            isNeural: face.isNeural
+        }))
+    });
 });
 
 // Get balance endpoint

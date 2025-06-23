@@ -16,6 +16,10 @@ class FaceRecognitionService: ObservableObject {
     @Published var isProcessing = false
     @Published var errorMessage: String?
     
+    // MARK: - Configuration
+    private let minimumSimilarityThreshold: Float = 0.75 // Require 75% similarity minimum
+    private let minimumConfidenceThreshold: Float = 0.8  // Require 80% face detection confidence
+    
     // MARK: - Face Detection and Embedding Generation
     func generateFaceEmbedding(from image: UIImage) async -> [Float]? {
         guard let cgImage = image.cgImage else {
@@ -53,8 +57,22 @@ class FaceRecognitionService: ObservableObject {
                 }
                 
                 guard let observations = request.results as? [VNFaceObservation],
-                      let faceObservation = observations.first else {
+                      !observations.isEmpty else {
                     continuation.resume(throwing: FaceRecognitionError.noFaceDetected)
+                    return
+                }
+                
+                // Filter observations by confidence threshold
+                let highConfidenceObservations = observations.filter { $0.confidence >= self.minimumConfidenceThreshold }
+                
+                guard let faceObservation = highConfidenceObservations.first else {
+                    continuation.resume(throwing: FaceRecognitionError.lowConfidenceDetection)
+                    return
+                }
+                
+                // Check for multiple faces (security measure)
+                if highConfidenceObservations.count > 1 {
+                    continuation.resume(throwing: FaceRecognitionError.multipleFacesDetected)
                     return
                 }
                 
@@ -111,9 +129,37 @@ class FaceRecognitionService: ObservableObject {
         embedding.append(centerY)
         embedding.append(aspectRatio)
         
-        // Pad to consistent size (128 dimensions)
+        // Generate additional deterministic features instead of random padding
+        // These create a more stable and meaningful embedding
+        let faceArea = Float(boundingBox.width * boundingBox.height)
+        let perimeter = Float(2 * (boundingBox.width + boundingBox.height))
+        let diagonal = Float(sqrt(boundingBox.width * boundingBox.width + boundingBox.height * boundingBox.height))
+        
+        // Add geometric features
+        embedding.append(faceArea)
+        embedding.append(perimeter)
+        embedding.append(diagonal)
+        embedding.append(Float(boundingBox.width / imageSize.width)) // Relative width
+        embedding.append(Float(boundingBox.height / imageSize.height)) // Relative height
+        
+        // Generate hash-like features from face position for uniqueness
+        let positionHash1 = sin(Float(boundingBox.origin.x * 100))
+        let positionHash2 = cos(Float(boundingBox.origin.y * 100))
+        let positionHash3 = sin(Float(boundingBox.width * 50))
+        let positionHash4 = cos(Float(boundingBox.height * 50))
+        
+        embedding.append(positionHash1)
+        embedding.append(positionHash2)
+        embedding.append(positionHash3)
+        embedding.append(positionHash4)
+        
+        // Pad remaining dimensions with deterministic values based on existing features
+        // This creates consistent embeddings for the same face
         while embedding.count < 128 {
-            embedding.append(Float.random(in: -0.1...0.1)) // Small random values
+            let index = embedding.count
+            let baseValue = embedding[index % 10] // Use existing features as base
+            let deterministicValue = sin(Float(index) * 0.1) * baseValue * 0.1
+            embedding.append(deterministicValue)
         }
         
         return Array(embedding.prefix(128)) // Ensure exactly 128 dimensions
@@ -124,8 +170,13 @@ class FaceRecognitionService: ObservableObject {
         var bestMatch: FaceMatchResult?
         var bestSimilarity: Float = -1.0
         
+        print("🔍 Face Matching Process:")
+        print("   Checking \(embeddings.count) stored faces...")
+        
         for storedEmbedding in embeddings {
             let similarity = calculateCosineSimilarity(queryEmbedding, storedEmbedding.embedding)
+            
+            print("   📊 \(storedEmbedding.userName): \(String(format: "%.3f", similarity)) similarity")
             
             if similarity > bestSimilarity {
                 bestSimilarity = similarity
@@ -137,7 +188,17 @@ class FaceRecognitionService: ObservableObject {
             }
         }
         
-        return bestMatch
+        // CRITICAL: Only return match if it meets minimum threshold
+        if let match = bestMatch, match.confidence >= minimumSimilarityThreshold {
+            print("   ✅ Valid match found: \(match.userName) (\(String(format: "%.3f", match.confidence)))")
+            return match
+        } else {
+            let actualConfidence = bestMatch?.confidence ?? 0.0
+            print("   ❌ No valid match found!")
+            print("   Best similarity: \(String(format: "%.3f", actualConfidence))")
+            print("   Required threshold: \(String(format: "%.3f", minimumSimilarityThreshold))")
+            return nil
+        }
     }
     
     private func calculateCosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
@@ -187,6 +248,7 @@ class FaceRecognitionService: ObservableObject {
 enum FaceRecognitionError: LocalizedError {
     case noFaceDetected
     case multipleFacesDetected
+    case lowConfidenceDetection
     case processingFailed
     
     var errorDescription: String? {
@@ -195,6 +257,8 @@ enum FaceRecognitionError: LocalizedError {
             return "No face detected in the image"
         case .multipleFacesDetected:
             return "Multiple faces detected. Please ensure only one face is visible"
+        case .lowConfidenceDetection:
+            return "Face detection confidence too low. Please ensure good lighting and clear face visibility"
         case .processingFailed:
             return "Face processing failed"
         }

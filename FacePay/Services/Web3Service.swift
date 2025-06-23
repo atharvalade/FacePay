@@ -31,7 +31,7 @@ class Web3Service: ObservableObject {
     private let paymentHubAddress = AppConfig.paymentHubAddress
     
     // API Configuration
-    private let apiBaseURL = "https://your-facepay-api.vercel.app" // Update this with your Vercel URL
+    private let apiBaseURL = "https://facepay-api.vercel.app"
     
     // Rate limiting
     private var lastRequestTimestamp: Date = .distantPast
@@ -218,24 +218,27 @@ class Web3Service: ObservableObject {
         print("   Nonce: \(transaction.nonce)")
         print("   Chain ID: \(transaction.chainId)")
         
-        // Execute REAL blockchain transaction using the Node.js script
+        // Execute REAL blockchain transaction using the original amount (not extracted)
+        // This avoids double conversion issue: we pass the original PYUSD amount
         return try await executeRealBlockchainTransaction(
             from: from,
             to: AppConfig.merchantAddress,
-            amount: extractAmountFromTransferData(transaction.data),
+            amount: amount, // Use original PYUSD amount, not extracted wei
             privateKey: privateKey
         )
     }
     
-    private func executeRealBlockchainTransaction(from: String, to: String, amount: String, privateKey: String) async throws -> String {
+    private func executeRealBlockchainTransaction(from: String, to: String, amount: Double, privateKey: String) async throws -> String {
         print("🚀 EXECUTING REAL BLOCKCHAIN TRANSACTION VIA API!")
         print("   📋 Using API for real blockchain transactions with streaming logs")
         
-        // Convert amount from wei to PYUSD (6 decimals)
-        let amountPYUSD = weiToPYUSD(amount)
+        // Amount is already in PYUSD format - no conversion needed!
+        // This fixes the double conversion issue
+        
+        print("   🔢 Amount (PYUSD): \(amount)")
         
         // Use API for real transactions (works on both iOS and macOS)
-        return try await executeAPITransaction(from: from, to: to, amount: amountPYUSD, privateKey: privateKey)
+        return try await executeAPITransaction(from: from, to: to, amount: amount, privateKey: privateKey)
     }
     
     private func executeAPITransaction(from: String, to: String, amount: Double, privateKey: String) async throws -> String {
@@ -993,6 +996,138 @@ class Web3Service: ObservableObject {
         }
         
         return result
+    }
+    
+    // MARK: - Face Recognition via API
+    func matchFaceViaAPI(imageData: Data) async -> FaceMatchResult? {
+        do {
+            guard let url = URL(string: "\(apiBaseURL)/face/match") else {
+                throw Web3Error.invalidURL
+            }
+            
+            // Create multipart form data
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            
+            let boundary = UUID().uuidString
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            
+            var formData = Data()
+            
+            // Add image data
+            formData.append("--\(boundary)\r\n".data(using: .utf8)!)
+            formData.append("Content-Disposition: form-data; name=\"image\"; filename=\"face.jpg\"\r\n".data(using: .utf8)!)
+            formData.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+            formData.append(imageData)
+            formData.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+            
+            request.httpBody = formData
+            
+            print("🔍 Sending face to API for neural network matching...")
+            
+            let (data, response) = try await session.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                print("❌ Face matching API error")
+                return nil
+            }
+            
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                print("❌ Invalid API response")
+                return nil
+            }
+            
+            if let success = result["success"] as? Bool, success,
+               let matchData = result["match"] as? [String: Any],
+               let walletAddress = matchData["walletAddress"] as? String,
+               let userName = matchData["userName"] as? String,
+               let confidence = matchData["confidence"] as? Double {
+                
+                print("✅ API Face Match Found!")
+                print("   User: \(userName)")
+                print("   Wallet: \(walletAddress)")
+                print("   Confidence: \(String(format: "%.1f", confidence * 100))%")
+                
+                return FaceMatchResult(
+                    walletAddress: walletAddress,
+                    userName: userName,
+                    confidence: Float(confidence)
+                )
+            } else {
+                print("❌ No face match found by API")
+                return nil
+            }
+            
+        } catch {
+            print("❌ Face matching API error: \(error)")
+            return nil
+        }
+    }
+    
+    func registerFaceViaAPI(imageData: Data, walletAddress: String, userName: String) async -> Bool {
+        do {
+            guard let url = URL(string: "\(apiBaseURL)/face/register") else {
+                throw Web3Error.invalidURL
+            }
+            
+            // Create multipart form data
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            
+            let boundary = UUID().uuidString
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            
+            var formData = Data()
+            
+            // Add wallet address
+            formData.append("--\(boundary)\r\n".data(using: .utf8)!)
+            formData.append("Content-Disposition: form-data; name=\"walletAddress\"\r\n\r\n".data(using: .utf8)!)
+            formData.append(walletAddress.data(using: .utf8)!)
+            formData.append("\r\n".data(using: .utf8)!)
+            
+            // Add user name
+            formData.append("--\(boundary)\r\n".data(using: .utf8)!)
+            formData.append("Content-Disposition: form-data; name=\"userName\"\r\n\r\n".data(using: .utf8)!)
+            formData.append(userName.data(using: .utf8)!)
+            formData.append("\r\n".data(using: .utf8)!)
+            
+            // Add image data
+            formData.append("--\(boundary)\r\n".data(using: .utf8)!)
+            formData.append("Content-Disposition: form-data; name=\"image\"; filename=\"face.jpg\"\r\n".data(using: .utf8)!)
+            formData.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+            formData.append(imageData)
+            formData.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+            
+            request.httpBody = formData
+            
+            print("📝 Registering face via API with neural networks...")
+            
+            let (data, response) = try await session.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                print("❌ Face registration API error")
+                return false
+            }
+            
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                print("❌ Invalid API response")
+                return false
+            }
+            
+            if let success = result["success"] as? Bool, success {
+                print("✅ Face registered successfully via API!")
+                return true
+            } else {
+                print("❌ Face registration failed")
+                return false
+            }
+            
+        } catch {
+            print("❌ Face registration API error: \(error)")
+            return false
+        }
     }
 }
 
