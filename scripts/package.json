@@ -1,0 +1,18 @@
+{
+  "name": "facepay-blockchain-transactions",
+  "version": "1.0.0",
+  "description": "Real blockchain transaction execution for FacePay app",
+  "main": "real_transaction.js",
+  "scripts": {
+    "install-deps": "npm install",
+    "test-transaction": "node real_transaction.js"
+  },
+  "dependencies": {
+    "ethers": "^6.8.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "author": "FacePay Team",
+  "license": "MIT"
+} 

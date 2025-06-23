@@ -21,7 +21,9 @@ struct ConsumerView: View {
                     BalanceCard(
                         balance: appState.currentBalance,
                         isLoading: appState.web3Service.isLoading,
-                        title: "Your Balance"
+                        title: "Your Balance",
+                        walletAddress: appState.selectedUser.address,
+                        web3Service: appState.web3Service
                     ) {
                         Task {
                             await appState.refreshBalance()
@@ -147,79 +149,7 @@ struct ConsumerView: View {
                 Spacer()
             }
             
-            let isRegistered = appState.storageService.isUserRegistered(address: appState.selectedUser.address)
-            
-            if isRegistered {
-                // Already Registered
-                HStack {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                    
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Face Registered ✨")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        
-                        Text("You're ready for instant payments!")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                    
-                    Button("Remove") {
-                        appState.removeUserFace()
-                    }
-                    .font(.caption)
-                    .foregroundColor(.red)
-                }
-                .padding(16)
-                .background(.green.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            } else {
-                // Need to Register
-                VStack(spacing: 12) {
-                    HStack {
-                        Image(systemName: "exclamationmark.circle")
-                            .foregroundColor(.orange)
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Face Not Registered")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            
-                            Text("Register your face for instant payments")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Spacer()
-                    }
-                    
-                    Button(action: {
-                        appState.startFaceRegistration()
-                    }) {
-                        HStack {
-                            Image(systemName: "camera")
-                            Text("Register Face")
-                                .fontWeight(.medium)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.blue)
-                        .foregroundColor(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                }
-                .padding(16)
-                .background(.orange.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-            
-            if appState.isRegistering {
-                RegistrationProgressView()
-                    .environmentObject(appState)
-            }
+            AsyncRegistrationStatusView(appState: appState)
         }
         .padding(20)
         .background(
@@ -304,7 +234,7 @@ struct ConsumerView: View {
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(appState.recentTransactions) { transaction in
-                        TransactionRow(transaction: transaction)
+                        TransactionRow(transaction: transaction, web3Service: appState.web3Service)
                     }
                 }
             }
@@ -374,39 +304,337 @@ struct ActionButton: View {
 
 struct TransactionRow: View {
     let transaction: TransactionRecord
+    let web3Service: Web3Service
+    @State private var showingDetails = false
     
     var body: some View {
-        HStack {
-            Image(systemName: transaction.type == .payment ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
-                .foregroundColor(transaction.type == .payment ? .red : .green)
-                .font(.title2)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(transaction.type.displayName)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+        VStack(spacing: 0) {
+            // Main transaction row
+            HStack {
+                Image(systemName: transaction.type == .payment ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+                    .foregroundColor(transaction.type == .payment ? .red : .green)
+                    .font(.title2)
                 
-                Text(transaction.timestamp, style: .relative)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(transaction.type.displayName)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    
+                    Text(transaction.timestamp, style: .relative)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("$\(String(format: "%.2f", transaction.amount))")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(transaction.type == .payment ? .red : .green)
+                    
+                    Text("PYUSD")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                // Expand/collapse button
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showingDetails.toggle()
+                    }
+                }) {
+                    Image(systemName: showingDetails ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(.gray.opacity(0.05))
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showingDetails.toggle()
+                }
             }
             
-            Spacer()
-            
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("$\(String(format: "%.2f", transaction.amount))")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(transaction.type == .payment ? .red : .green)
-                
-                Text("PYUSD")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+            // Expanded details
+            if showingDetails {
+                VStack(alignment: .leading, spacing: 12) {
+                    Divider()
+                    
+                    // Transaction hash with explorer link
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Transaction Hash")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        HStack {
+                            Text(formatHash(transaction.hash))
+                                .font(.caption.monospaced())
+                                .foregroundColor(.primary)
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                UIPasteboard.general.string = transaction.hash
+                            }) {
+                                Image(systemName: "doc.on.clipboard")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
+                            
+                            Button(action: {
+                                if let url = URL(string: web3Service.getExplorerURL(for: transaction.hash)) {
+                                    UIApplication.shared.open(url)
+                                }
+                            }) {
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                    
+                    // Addresses
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("From")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(formatAddress(transaction.from))
+                                .font(.caption2.monospaced())
+                                .foregroundColor(.primary)
+                        }
+                        
+                        Image(systemName: "arrow.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text("To")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(formatAddress(transaction.to))
+                                .font(.caption2.monospaced())
+                                .foregroundColor(.primary)
+                        }
+                    }
+                    
+                    // Timestamp
+                    HStack {
+                        Text("Date & Time")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(transaction.timestamp, style: .date)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                        Text(transaction.timestamp, style: .time)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                    }
+                }
+                .padding()
+                .background(.gray.opacity(0.02))
             }
         }
-        .padding()
-        .background(.gray.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+    
+    private func formatHash(_ hash: String) -> String {
+        return "\(hash.prefix(10))...\(hash.suffix(8))"
+    }
+    
+    private func formatAddress(_ address: String) -> String {
+        return "\(address.prefix(6))...\(address.suffix(4))"
+    }
+}
+
+// MARK: - Async Registration Status View
+struct AsyncRegistrationStatusView: View {
+    @ObservedObject var appState: AppState
+    @State private var isRegistered = false
+    @State private var isLoading = true
+    @State private var isRemoving = false
+    
+    var body: some View {
+        Group {
+            if isLoading {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Checking registration...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+            } else if isRegistered {
+                // Already Registered
+                VStack(spacing: 12) {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Face Registered ✨")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            
+                            Text("You're ready for instant payments!")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        if isRemoving {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Button("Remove") {
+                                Task {
+                                    await removeUserFace()
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundColor(.red)
+                        }
+                    }
+                    
+                    // Action Buttons
+                    HStack(spacing: 12) {
+                        // Go to Merchant Button
+                        Button(action: {
+                            appState.currentMode = .merchant
+                        }) {
+                            HStack {
+                                Image(systemName: "storefront")
+                                Text("Go to Merchant")
+                                    .fontWeight(.medium)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.green)
+                            .foregroundColor(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                }
+                .padding(16)
+                .background(.green.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else {
+                // Need to Register
+                VStack(spacing: 12) {
+                    HStack {
+                        Image(systemName: "exclamationmark.circle")
+                            .foregroundColor(.orange)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Face Not Registered")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            
+                            Text("Register your face for instant payments")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                    }
+                    
+                    Button(action: {
+                        appState.startFaceRegistration()
+                    }) {
+                        HStack {
+                            Image(systemName: "camera")
+                            Text("Register Face")
+                                .fontWeight(.medium)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(.blue)
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .padding(16)
+                .background(.orange.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            
+            if appState.isRegistering {
+                RegistrationProgressView()
+                    .environmentObject(appState)
+            }
+        }
+        .onAppear {
+            Task {
+                await checkRegistrationStatus()
+            }
+        }
+        .onChange(of: appState.selectedUser.address) { _, _ in
+            Task {
+                await checkRegistrationStatus()
+            }
+        }
+        .onChange(of: appState.currentPayPalUser?.sub) { _, _ in
+            Task {
+                await checkRegistrationStatus()
+            }
+        }
+        .onChange(of: appState.isUserSetup) { _, newValue in
+            if newValue {
+                Task {
+                    await checkRegistrationStatus()
+                }
+            }
+        }
+        .onChange(of: appState.faceRegistrationStatusChanged) { _, _ in
+            Task {
+                await checkRegistrationStatus()
+            }
+        }
+    }
+    
+    private func checkRegistrationStatus() async {
+        await MainActor.run { isLoading = true }
+        
+        let registered = await appState.isUserRegistered()
+        
+        await MainActor.run {
+            isRegistered = registered
+            isLoading = false
+        }
+        
+        print("📝 Registration status for \(appState.selectedUser.name): \(registered)")
+    }
+    
+    private func removeUserFace() async {
+        await MainActor.run { isRemoving = true }
+        
+        // Remove from Supabase
+        if let paypalId = appState.currentPayPalUser?.sub {
+            do {
+                try await appState.supabaseService.deleteFaceEmbedding(paypalId: paypalId)
+                print("✅ Deleted face embedding from Supabase for PayPal ID: \(paypalId)")
+            } catch {
+                print("❌ Failed to delete from Supabase: \(error)")
+            }
+        }
+        
+        // Remove from local storage as fallback
+        appState.storageService.removeFaceEmbedding(for: appState.selectedUser.address)
+        
+        await MainActor.run {
+            isRemoving = false
+            isRegistered = false
+        }
+        
+        // Trigger UI refresh notification
+        appState.faceRegistrationStatusChanged.toggle()
+        
+        appState.showAlert(title: "Face Removed", message: "\(appState.selectedUser.name)'s face registration has been removed.")
     }
 }
 

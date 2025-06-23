@@ -9,7 +9,10 @@ import SwiftUI
 
 @main
 struct FacePayApp: App {
+    @StateObject private var appState = AppState()
+    @StateObject private var paypalService = PayPalService()
     @State private var showingSplash = true
+    @State private var currentUser: SupabaseUser?
     
     var body: some Scene {
         WindowGroup {
@@ -20,20 +23,25 @@ struct FacePayApp: App {
                             insertion: .identity,
                             removal: .scale.combined(with: .opacity)
                         ))
+                } else if !paypalService.isLoggedIn || currentUser == nil {
+                    PayPalLoginView { paypalUser, supabaseUser in
+                        currentUser = supabaseUser
+                        appState.setupWithPayPalUser(paypalUser: paypalUser, supabaseUser: supabaseUser)
+                    }
+                    .transition(.move(edge: .leading))
                 } else {
-                    ContentView()
-                        .transition(.asymmetric(
-                            insertion: .scale.combined(with: .opacity),
-                            removal: .identity
-                        ))
+                    ContentView(appState: appState)
+                        .transition(.move(edge: .trailing))
                 }
             }
             .animation(.easeInOut(duration: 1.0), value: showingSplash)
+            .animation(.easeInOut(duration: 0.6), value: paypalService.isLoggedIn)
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                     showingSplash = false
                 }
             }
+            .environmentObject(paypalService)
         }
     }
 }

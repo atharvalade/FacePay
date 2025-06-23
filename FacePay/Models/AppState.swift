@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import Combine
 
+@MainActor
 class AppState: ObservableObject {
     
     // MARK: - Published Properties
@@ -22,10 +23,19 @@ class AppState: ObservableObject {
     @Published var alertTitle = ""
     @Published var recentTransactions: [TransactionRecord] = []
     
+    // PayPal Integration
+    @Published var currentPayPalUser: PayPalUserProfile?
+    @Published var currentSupabaseUser: SupabaseUser?
+    @Published var isUserSetup = false
+    
+    // Face Registration Status
+    @Published var faceRegistrationStatusChanged = false
+    
     // MARK: - Services
     @Published var faceService = FaceRecognitionService()
     @Published var storageService = StorageService()
     @Published var web3Service = Web3Service()
+    @Published var supabaseService = SupabaseService()
     
     // MARK: - Merchant State
     @Published var merchantAmount: String = ""
@@ -74,32 +84,53 @@ class AppState: ObservableObject {
     @MainActor
     func refreshBalance() async {
         let address = currentMode == .merchant ? AppConfig.merchantAddress : selectedUser.address
-        currentBalance = await web3Service.getPYUSDBalance(for: address)
+        let balance = await web3Service.getPYUSDBalance(for: address)
+        
+        // Ensure UI update happens on next run loop to avoid SwiftUI conflicts
+        DispatchQueue.main.async { [weak self] in
+            self?.currentBalance = balance
+        }
     }
     
     // MARK: - Transaction Management
     @MainActor
     func loadRecentTransactions() async {
         let address = currentMode == .merchant ? AppConfig.merchantAddress : selectedUser.address
-        recentTransactions = await web3Service.getRecentTransactions(for: address)
+        let transactions = await web3Service.getRecentTransactions(for: address)
+        
+        // Ensure UI update happens on next run loop to avoid SwiftUI conflicts
+        DispatchQueue.main.async { [weak self] in
+            self?.recentTransactions = transactions
+        }
     }
     
     // MARK: - Face Registration
     @MainActor
     func startFaceRegistration() {
-        guard !storageService.isUserRegistered(address: selectedUser.address) else {
-            showAlert(title: "Already Registered", message: "\(selectedUser.name) already has a face registered. Remove the existing registration first.")
+        guard let paypalUser = currentPayPalUser else {
+            showAlert(title: "Error", message: "PayPal user not found. Please login again.")
             return
         }
         
-        guard !isRegistering else {
-            print("⚠️ Registration already in progress")
-            return
+        // Check if user is already registered in Supabase
+        Task {
+            let hasEmbedding = await supabaseService.hasFaceEmbedding(paypalId: paypalUser.sub)
+            await MainActor.run {
+                if hasEmbedding {
+                    showAlert(title: "Already Registered", message: "\(paypalUser.name) already has a face registered. Remove the existing registration first.")
+                    return
+                }
+                
+                guard !isRegistering else {
+                    print("⚠️ Registration already in progress")
+                    return
+                }
+                
+                capturedImages = []
+                isRegistering = true
+                showingCamera = true
+            }
         }
-        
-        capturedImages = []
-        isRegistering = true
-        showingCamera = true
     }
     
     @MainActor
@@ -128,25 +159,62 @@ class AppState: ObservableObject {
             return 
         }
         
-        if let averageEmbedding = await faceService.generateAverageEmbedding(from: capturedImages) {
-            
-            // Process embedding addition on background queue to avoid publishing warnings
-            storageService.addFaceEmbedding(
-                walletAddress: selectedUser.address,
-                embedding: averageEmbedding,
-                userName: selectedUser.name
-            )
-            
+        guard let paypalUser = currentPayPalUser,
+              let supabaseUser = currentSupabaseUser else {
             await MainActor.run {
                 isRegistering = false
                 capturedImages = []
+                showAlert(title: "Error", message: "User information not found.")
             }
+            return
+        }
+        
+        if let averageEmbedding = await faceService.generateAverageEmbedding(from: capturedImages) {
             
-            // Delay alert to avoid presentation conflicts
-            await MainActor.run {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    guard let self = self else { return }
-                    self.showAlert(title: "Registration Complete! 🎉", message: "\(self.selectedUser.name)'s face has been successfully registered for payments.")
+            do {
+                // Save to Supabase
+                _ = try await supabaseService.saveFaceEmbedding(
+                    userId: supabaseUser.id ?? UUID(),
+                    paypalId: paypalUser.sub,
+                    walletAddress: selectedUser.address,
+                    embedding: averageEmbedding
+                )
+                
+                // Also save locally for backwards compatibility
+                storageService.addFaceEmbedding(
+                    walletAddress: selectedUser.address,
+                    embedding: averageEmbedding,
+                    userName: selectedUser.name
+                )
+                
+                await MainActor.run {
+                    isRegistering = false
+                    capturedImages = []
+                }
+                
+                print("✅ Face registration completed for \(paypalUser.name)")
+                
+                // Trigger UI refresh for registration status
+                await MainActor.run {
+                    faceRegistrationStatusChanged.toggle()
+                }
+                
+                // Delay alert to avoid presentation conflicts
+                await MainActor.run {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        guard let self = self else { return }
+                        self.showAlert(title: "Registration Complete! 🎉", message: "\(paypalUser.name)'s face has been successfully registered for payments.")
+                    }
+                }
+                
+            } catch {
+                await MainActor.run {
+                    isRegistering = false
+                    capturedImages = []
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        guard let self = self else { return }
+                        self.showAlert(title: "Registration Failed", message: "Failed to save face data: \(error.localizedDescription)")
+                    }
                 }
             }
         } else {
@@ -179,19 +247,81 @@ class AppState: ObservableObject {
             return
         }
         
-        let allEmbeddings = storageService.getAllEmbeddings()
+        print("🎯 Face captured, searching for matches...")
         
-        if let match = faceService.findBestMatch(for: queryEmbedding, in: allEmbeddings), match.isMatch {
-            lastCustomerMatch = match
-            await processPayment(match: match)
-        } else {
-            showAlert(title: "No Match Found", message: "Face not recognized. Customer may need to register first.")
+        // Get embeddings from Supabase (cloud storage)
+        do {
+            let supabaseEmbeddings = try await supabaseService.getAllFaceEmbeddings()
+            print("📦 Retrieved \(supabaseEmbeddings.count) embeddings from Supabase")
+            
+            // Log all embeddings for debugging
+            for embedding in supabaseEmbeddings {
+                print("   - PayPal ID: \(embedding.paypalId), Wallet: \(embedding.walletAddress)")
+            }
+            
+            // Convert Supabase embeddings to local format for matching
+            let localEmbeddings = supabaseEmbeddings.map { supabaseEmbedding in
+                FaceEmbedding(
+                    walletAddress: supabaseEmbedding.walletAddress,
+                    embedding: supabaseEmbedding.embedding.map { Float($0) }, // Convert Double to Float
+                    userName: "PayPal User", // We'll get the name from PayPal ID later
+                    registrationDate: supabaseEmbedding.createdAt ?? Date()
+                )
+            }
+            
+            print("🔍 Looking for face match...")
+            if let match = faceService.findBestMatch(for: queryEmbedding, in: localEmbeddings), match.isMatch {
+                print("✅ Face match found!")
+                print("   - Confidence: \(match.confidence)")
+                print("   - Wallet: \(match.walletAddress)")
+                print("   - Payment amount: \(merchantAmount) PYUSD")
+                
+                lastCustomerMatch = match
+                
+                // Process payment with proper async handling
+                Task {
+                    await processPayment(match: match)
+                }
+            } else {
+                print("❌ No face match found")
+                showAlert(title: "No Match Found", message: "Face not recognized. Customer may need to register first.")
+            }
+            
+        } catch {
+            print("❌ Error getting embeddings from Supabase: \(error)")
+            // Fallback to local storage
+            let allEmbeddings = storageService.getAllEmbeddings()
+            print("📱 Fallback to local storage: \(allEmbeddings.count) embeddings")
+            
+            if let match = faceService.findBestMatch(for: queryEmbedding, in: allEmbeddings), match.isMatch {
+                print("✅ Local face match found!")
+                print("   - Confidence: \(match.confidence)")
+                print("   - Wallet: \(match.walletAddress)")
+                
+                lastCustomerMatch = match
+                
+                // Process payment with proper async handling
+                Task {
+                    await processPayment(match: match)
+                }
+            } else {
+                print("❌ No local face match found")
+                showAlert(title: "No Match Found", message: "Face not recognized. Customer may need to register first.")
+            }
         }
     }
     
     // MARK: - Payment Processing
     private func processPayment(match: FaceMatchResult) async {
-        guard let amount = Double(merchantAmount) else { return }
+        guard let amount = Double(merchantAmount) else { 
+            print("❌ Invalid merchant amount: \(merchantAmount)")
+            return 
+        }
+        
+        print("💳 Processing payment:")
+        print("   - Customer: \(match.walletAddress)")
+        print("   - Amount: \(amount) PYUSD")
+        print("   - Merchant key: \(AppConfig.merchantPrivateKey.prefix(10))...")
         
         let success = await web3Service.chargeCustomer(
             customerAddress: match.walletAddress,
@@ -199,19 +329,29 @@ class AppState: ObservableObject {
             merchantPrivateKey: AppConfig.merchantPrivateKey
         )
         
+        print("💰 Payment result: \(success ? "SUCCESS" : "FAILED")")
+        if let errorMsg = web3Service.errorMessage {
+            print("   Error: \(errorMsg)")
+        }
+
         await MainActor.run {
             if success {
-                lastPaymentAmount = amount
-                showingPaymentSuccess = true
-                merchantAmount = ""
+                print("🎉 Payment successful, updating UI...")
+                self.lastPaymentAmount = amount
+                self.showingPaymentSuccess = true
+                self.merchantAmount = ""
                 
-                // Refresh balances and transactions
+                // Refresh balances and transactions after a delay
                 Task {
-                    await refreshBalance()
-                    await loadRecentTransactions()
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    await self.refreshBalance()
+                    await self.loadRecentTransactions()
                 }
+
             } else {
-                showAlert(title: "Payment Failed", message: "Could not process payment. Please try again.")
+                print("💥 Payment failed, showing error...")
+                let errorMessage = self.web3Service.errorMessage ?? "Could not process payment. Please try again."
+                self.showAlert(title: "Payment Failed", message: errorMessage)
             }
         }
     }
@@ -232,23 +372,75 @@ class AppState: ObservableObject {
         selectedUser = AppConfig.demoUsers[nextIndex]
     }
     
-    @MainActor
-    func removeUserFace() {
-        storageService.removeFaceEmbedding(for: selectedUser.address)
-        showAlert(title: "Face Removed", message: "\(selectedUser.name)'s face registration has been removed.")
+
+    
+    // MARK: - User Registration Status
+    func isUserRegistered() async -> Bool {
+        guard let paypalUser = currentPayPalUser else { 
+            print("⚠️ No PayPal user found for registration check")
+            return false 
+        }
+        
+        let hasEmbedding = await supabaseService.hasFaceEmbedding(paypalId: paypalUser.sub)
+        print("🔍 Checking face registration for PayPal ID: \(paypalUser.sub)")
+        print("   Result: \(hasEmbedding ? "REGISTERED" : "NOT REGISTERED")")
+        
+        return hasEmbedding
     }
     
     // MARK: - Alert Management
     @MainActor
     func showAlert(title: String, message: String) {
+        // Simple approach: only show if no alert is currently showing
+        guard !showingAlert else {
+            print("⚠️ Alert already showing, skipping: \(title) - \(message)")
+            return
+        }
+        
         alertTitle = title
         alertMessage = message
         showingAlert = true
+        print("📱 Showing alert: \(title) - \(message)")
+    }
+    
+    // MARK: - PayPal Integration
+    @MainActor
+    func setupWithPayPalUser(paypalUser: PayPalUserProfile, supabaseUser: SupabaseUser) {
+        currentPayPalUser = paypalUser
+        currentSupabaseUser = supabaseUser
+        isUserSetup = true
+        
+        // Update selected user based on PayPal user with real name
+        if let demoUser = AppConfig.demoUsers.first(where: { $0.id == paypalUser.sub }) {
+            // Create an updated user with the real PayPal name
+            selectedUser = DemoUser(
+                id: demoUser.id,
+                name: paypalUser.name, // Use real PayPal name
+                email: demoUser.email,
+                address: demoUser.address,
+                privateKey: demoUser.privateKey
+            )
+        }
+        
+        print("✅ Setup complete for PayPal user: \(paypalUser.name)")
+        print("   Email: \(paypalUser.email)")
+        print("   Wallet: \(selectedUser.address)")
+        
+        // Load user data
+        Task {
+            await refreshBalance()
+            await loadRecentTransactions()
+        }
     }
     
     // MARK: - Demo Reset
     @MainActor
     func resetDemo() {
+        if let paypalId = currentPayPalUser?.sub {
+            Task {
+                try? await supabaseService.deleteFaceEmbedding(paypalId: paypalId)
+            }
+        }
         storageService.clearAllEmbeddings()
         merchantAmount = ""
         lastCustomerMatch = nil

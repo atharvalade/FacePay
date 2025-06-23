@@ -11,6 +11,8 @@ struct BalanceCard: View {
     let balance: Double
     let isLoading: Bool
     let title: String
+    let walletAddress: String
+    let web3Service: Web3Service
     let onRefresh: () -> Void
     
     @State private var isAnimating = false
@@ -31,13 +33,27 @@ struct BalanceCard: View {
                 
                 Spacer()
                 
-                Button(action: onRefresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.title2)
-                        .foregroundColor(.blue)
-                        .rotationEffect(.degrees(isAnimating ? 360 : 0))
+                HStack(spacing: 12) {
+                    // Explorer link button
+                    Button(action: {
+                        if let url = URL(string: web3Service.getAddressExplorerURL(for: walletAddress)) {
+                            UIApplication.shared.open(url)
+                        }
+                    }) {
+                        Image(systemName: "link.circle")
+                            .font(.title2)
+                            .foregroundColor(.blue)
+                    }
+                    
+                    // Refresh button
+                    Button(action: onRefresh) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.title2)
+                            .foregroundColor(.blue)
+                            .rotationEffect(.degrees(isAnimating ? 360 : 0))
+                    }
+                    .disabled(isLoading)
                 }
-                .disabled(isLoading)
             }
             
             // Balance Display
@@ -73,7 +89,38 @@ struct BalanceCard: View {
                 }
             }
             
-            // PYUSD Logo/Info
+            // Wallet Address
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Wallet Address:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                
+                HStack {
+                    Text(formatAddress(walletAddress))
+                        .font(.caption.monospaced())
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        UIPasteboard.general.string = walletAddress
+                    }) {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.gray.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            
+            // Network Info
             HStack {
                 Image(systemName: "p.circle.fill")
                     .foregroundColor(.blue)
@@ -84,15 +131,22 @@ struct BalanceCard: View {
                 
                 Spacer()
                 
-                // Network indicator
+                // Network indicator with real connection status
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(.green)
+                        .fill(isLoading ? .orange : .green)
                         .frame(width: 8, height: 8)
                     
                     Text("Sepolia")
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    
+                    // Live indicator
+                    if !isLoading {
+                        Text("• Live")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
                 }
             }
         }
@@ -114,6 +168,10 @@ struct BalanceCard: View {
             }
         }
     }
+    
+    private func formatAddress(_ address: String) -> String {
+        return "\(address.prefix(6))...\(address.suffix(4))"
+    }
 }
 
 // MARK: - Preview
@@ -123,6 +181,8 @@ struct BalanceCard: View {
             balance: 187.50,
             isLoading: false,
             title: "Your Balance",
+            walletAddress: "0x9f93EebD463d4B7c991986a082d974E77b5a02Dc",
+            web3Service: Web3Service(),
             onRefresh: {}
         )
         
@@ -130,6 +190,8 @@ struct BalanceCard: View {
             balance: 0.0,
             isLoading: true,
             title: "Merchant Balance",
+            walletAddress: "0x27A7A44250C6Eb3C84d1d894c8A601742827C7C7",
+            web3Service: Web3Service(),
             onRefresh: {}
         )
     }

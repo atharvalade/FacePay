@@ -20,6 +20,13 @@ struct FaceEmbedding: Codable {
         self.userName = userName
         self.registrationDate = Date()
     }
+    
+    init(walletAddress: String, embedding: [Float], userName: String, registrationDate: Date) {
+        self.walletAddress = walletAddress
+        self.embedding = embedding
+        self.userName = userName
+        self.registrationDate = registrationDate
+    }
 }
 
 // MARK: - Face Embeddings Storage

@@ -22,7 +22,9 @@ struct MerchantView: View {
                     BalanceCard(
                         balance: appState.currentBalance,
                         isLoading: appState.web3Service.isLoading,
-                        title: "Merchant Balance"
+                        title: "Merchant Balance",
+                        walletAddress: AppConfig.merchantAddress,
+                        web3Service: appState.web3Service
                     ) {
                         Task {
                             await appState.refreshBalance()
@@ -37,6 +39,11 @@ struct MerchantView: View {
                     
                     // Recent Sales
                     RecentSalesSection()
+                    
+                    // Real-time Transaction Logs
+                    if appState.web3Service.isLoading || !appState.web3Service.streamingLogs.isEmpty {
+                        TransactionLogsView(web3Service: appState.web3Service)
+                    }
                     
                     Spacer(minLength: 100)
                 }
