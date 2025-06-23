@@ -31,7 +31,7 @@ class Web3Service: ObservableObject {
     private let paymentHubAddress = AppConfig.paymentHubAddress
     
     // API Configuration
-    private let apiBaseURL = "https://facepay-api.vercel.app"
+    private let apiBaseURL = "http://localhost:3000" // Use local API for testing
     
     // Rate limiting
     private var lastRequestTimestamp: Date = .distantPast
@@ -169,7 +169,8 @@ class Web3Service: ObservableObject {
             nonce: nonce,
             gasPrice: gasPrice,
             chainId: chainId,
-            privateKey: privateKey
+            privateKey: privateKey,
+            amount: amount
         )
         
         print("✅ Transaction Created!")
@@ -195,7 +196,7 @@ class Web3Service: ObservableObject {
         return "0x2540be400" // 10 gwei
     }
     
-    private func createAndSignRealTransaction(from: String, to: String, data: String, nonce: Int, gasPrice: String, chainId: Int, privateKey: String) async throws -> String {
+    private func createAndSignRealTransaction(from: String, to: String, data: String, nonce: Int, gasPrice: String, chainId: Int, privateKey: String, amount: Double) async throws -> String {
         print("🔐 Creating and signing REAL Ethereum transaction...")
         
         // Create the transaction with reasonable gas limit

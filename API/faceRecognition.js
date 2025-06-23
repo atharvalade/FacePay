@@ -95,7 +95,7 @@ class FaceRecognitionService {
             console.log(`👤 Face detected with confidence: ${detection.detection.score.toFixed(3)}`);
             
             // Check minimum confidence threshold
-            if (detection.detection.score < 0.8) {
+            if (detection.detection.score < 0.5) {
                 throw new Error('Face detection confidence too low');
             }
 
@@ -163,7 +163,7 @@ class FaceRecognitionService {
         }
     }
 
-    async findBestMatch(imageBuffer, minimumThreshold = 0.6) {
+    async findBestMatch(imageBuffer, minimumThreshold = 0.3) {
         try {
             const queryFaceData = await this.detectFaceAndGetDescriptor(imageBuffer);
             const queryDescriptor = queryFaceData.descriptor;
@@ -204,7 +204,7 @@ class FaceRecognitionService {
             }
 
             // Adjust threshold for fallback mode
-            const adjustedThreshold = queryFaceData.isNeural ? minimumThreshold : 0.3;
+            const adjustedThreshold = queryFaceData.isNeural ? minimumThreshold : 0.2;
 
             // Check if best match meets threshold
             if (bestMatch && bestMatch.distance <= (1 - adjustedThreshold)) {
