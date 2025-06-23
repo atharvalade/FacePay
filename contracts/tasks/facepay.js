@@ -17,9 +17,16 @@ function parsePYUSD(amount) {
 task("check-balances", "Check PYUSD balances for all wallets")
   .setAction(async (taskArgs, hre) => {
     const config = hre.config.facepay;
-    const pyusdContract = await hre.ethers.getContractAt(
-      "IERC20", 
-      config.pyusdAddress
+    
+    // Use standard ERC-20 ABI
+    const erc20Abi = [
+      "function balanceOf(address account) external view returns (uint256)"
+    ];
+    
+    const pyusdContract = new hre.ethers.Contract(
+      config.pyusdAddress,
+      erc20Abi,
+      hre.ethers.provider
     );
     
     console.log("=== PYUSD Balances ===");
@@ -54,9 +61,16 @@ task("set-approval", "Set PYUSD approval for PaymentHub contract")
     const [signer1, signer2] = await hre.ethers.getSigners();
     const signer = taskArgs.user === "user1" ? signer1 : signer2;
     
-    const pyusdContract = await hre.ethers.getContractAt(
-      "IERC20", 
+    // Use standard ERC-20 ABI
+    const erc20Abi = [
+      "function approve(address spender, uint256 amount) external returns (bool)",
+      "function allowance(address owner, address spender) external view returns (uint256)",
+      "function balanceOf(address account) external view returns (uint256)"
+    ];
+    
+    const pyusdContract = new hre.ethers.Contract(
       config.pyusdAddress,
+      erc20Abi,
       signer
     );
     
@@ -85,9 +99,15 @@ task("check-approvals", "Check PYUSD approvals for PaymentHub")
       throw new Error("PAYMENT_HUB_ADDRESS not set. Deploy PaymentHub first.");
     }
     
-    const pyusdContract = await hre.ethers.getContractAt(
-      "IERC20", 
-      config.pyusdAddress
+    // Use standard ERC-20 ABI
+    const erc20Abi = [
+      "function allowance(address owner, address spender) external view returns (uint256)"
+    ];
+    
+    const pyusdContract = new hre.ethers.Contract(
+      config.pyusdAddress,
+      erc20Abi,
+      hre.ethers.provider
     );
     
     console.log("=== PYUSD Approvals for PaymentHub ===");
@@ -121,9 +141,14 @@ task("simulate-payment", "Simulate a payment transaction")
     // Merchant signer (3rd signer)
     const [, , merchantSigner] = await hre.ethers.getSigners();
     
-    const paymentHub = await hre.ethers.getContractAt(
-      "PaymentHub",
+    // PaymentHub ABI
+    const paymentHubAbi = [
+      "function charge(address customer, uint256 amount) external"
+    ];
+    
+    const paymentHub = new hre.ethers.Contract(
       paymentHubAddress,
+      paymentHubAbi,
       merchantSigner
     );
     
@@ -136,7 +161,15 @@ task("simulate-payment", "Simulate a payment transaction")
     console.log("");
     
     // Check balances before
-    const pyusdContract = await hre.ethers.getContractAt("IERC20", config.pyusdAddress);
+    const erc20AbiForBalance = [
+      "function balanceOf(address account) external view returns (uint256)"
+    ];
+    
+    const pyusdContract = new hre.ethers.Contract(
+      config.pyusdAddress,
+      erc20AbiForBalance,
+      hre.ethers.provider
+    );
     const customerBalanceBefore = await pyusdContract.balanceOf(customerAddress);
     const merchantBalanceBefore = await pyusdContract.balanceOf(config.wallets.merchant);
     

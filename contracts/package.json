@@ -9,7 +9,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": ["ethereum", "pyusd", "face-recognition", "payments", "smart-contracts"],
-  "author": "FacePay Team",
+  "author": "FacePay",
   "license": "MIT",
   "description": "Smart contracts for FacePay - face-based PYUSD payments",
   "devDependencies": {
