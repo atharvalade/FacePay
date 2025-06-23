@@ -1,0 +1,22 @@
+{
+  "name": "facepay-contracts",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy": "hardhat ignition deploy ignition/modules/PaymentHub.js --network sepolia",
+    "check-balances": "hardhat check-balances --network sepolia",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["ethereum", "pyusd", "face-recognition", "payments", "smart-contracts"],
+  "author": "FacePay Team",
+  "license": "MIT",
+  "description": "Smart contracts for FacePay - face-based PYUSD payments",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.24.3"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0"
+  }
+}
